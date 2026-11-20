@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: 校验 skill 格式
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 校验所有 skill
+        run: python scripts/validate.py
+
+      - name: 校验 tag 命名与版本号一致
+        run: |
+          for s in $(./scripts/install.sh -l); do
+            ver=$(python -c "import sys,pathlib;sys.path.insert(0,'scripts');from validate import find_skills,read_version;m={p.name:p for p in find_skills(pathlib.Path('.'))};print(read_version(m['$s']))")
+            python scripts/verify_tag.py "$s-v$ver"
+          done
+          # 版本对不上时必须失败
+          if python scripts/verify_tag.py paper-quick-reader-v9.9.9 >/dev/null 2>&1; then
+            echo "verify_tag 未拦住不一致的 tag"; exit 1
+          fi
+
+      - name: 试打包（验证 zip 结构）
+        run: python scripts/build_packages.py --skip-validate
+
+      - name: 检查 zip 内容
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys, zipfile
+
+          ok = True
+          for z in sorted(pathlib.Path("dist").glob("*.zip")):
+              with zipfile.ZipFile(z) as zf:
+                  tops = {n.split("/")[0] for n in zf.namelist()}
+              if len(tops) != 1:
+                  print(f"{z.name}: 顶层目录不唯一 {sorted(tops)}"); ok = False; continue
+              top = tops.pop()
+              base = re.sub(r"-v\d+\.\d+\.\d+.*$", "", z.stem)
+              if top != base:
+                  print(f"{z.name}: 顶层 {top} 与 skill 名 {base} 不符"); ok = False
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: 检查 install.sh 软链与复制
+        run: |
+          ./scripts/install.sh -l
+          ./scripts/install.sh -t /tmp/link-test
+          for s in $(./scripts/install.sh -l); do
+            test -f "/tmp/link-test/$s/SKILL.md" || { echo "软链失败: $s"; exit 1; }
+          done
+          ./scripts/install.sh --copy -t /tmp/copy-test
+          test -f /tmp/copy-test/paper-quick-reader/SKILL.md
+
+      - name: 检查 install.sh --ref 固定版本
+        run: |
+          git tag ref-test
+          ./scripts/install.sh --ref ref-test -t /tmp/ref-test paper-quick-reader
+          test -f /tmp/ref-test/paper-quick-reader/SKILL.md
+          # 固定版本必须是复制，不能是软链（软链会跟着工作区变）
+          test ! -L /tmp/ref-test/paper-quick-reader

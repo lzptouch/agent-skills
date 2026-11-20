@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"          # 整仓快照：v1.2.0
+      - "*-v*"        # 单 skill 发布：paper-quick-reader-v1.2.0
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 打包并发布
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 校验所有 skill
+        run: python scripts/validate.py
+
+      - name: 校验 tag 与版本号一致
+        run: python scripts/verify_tag.py "${GITHUB_REF_NAME}"
+
+      - name: 逐 skill 打包
+        run: python scripts/build_packages.py --skip-validate
+
+      - name: 列出产物
+        run: ls -lh dist/
+
+      - name: 创建 Release 并上传 zip
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS
+          generate_release_notes: true
+          body: |
+            每个 skill 各两份 zip，内容相同：
+
+            | 文件名 | 用途 |
+            |---|---|
+            | `<skill>-v<version>.zip` | 固定版本，锁定用（永久可用） |
+            | `<skill>.zip` | 滚动别名，指向最新一次发布 |
+
+            装最新版：
+
+            ```bash
+            curl -L -o <skill>.zip \
+              https://github.com/${{ github.repository }}/releases/latest/download/<skill>.zip
+            unzip -o <skill>.zip -d ~/.codebuddy/skills/
+            ```
+
+            装固定版本（推荐，行为可复现）：
+
+            ```bash
+            curl -L -o <skill>.zip \
+              https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/<skill>-v<version>.zip
+            unzip -o <skill>.zip -d ~/.codebuddy/skills/
+            ```
+
+            完整性校验见附件 `SHA256SUMS`。
